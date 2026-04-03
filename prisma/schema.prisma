@@ -1,0 +1,447 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// المؤسسات (مستشفيات، عيادات، مراكز رعاية)
+model Organization {
+  id              String   @id @default(cuid())
+  name            String
+  type            String   // hospital, clinic, care_center, personal
+  logo            String?
+  address         String?
+  phone           String?
+  email           String?
+  website         String?
+  license         String?
+  isActive        Boolean  @default(true)
+  plan            String   @default("free") // free, basic, premium, enterprise
+  maxPatients     Int      @default(50)
+  maxUsers        Int      @default(10)
+  timezone        String   @default("Africa/Cairo")
+  language        String   @default("ar")
+  currency        String   @default("EGP")
+  features        String?  // JSON string for enabled features
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  users           User[]
+  patients        Patient[]
+  departments     Department[]
+  appointments    Appointment[]
+  auditLogs       AuditLog[]
+  settings        OrganizationSetting[]
+}
+
+// الأقسام
+model Department {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String?
+  headDoctor     String?
+  floor          String?
+  capacity       Int      @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  patients       Patient[]
+  staff          User[]
+
+  @@index([organizationId])
+}
+
+// المستخدمين
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  phone          String?
+  name           String
+  password       String?
+  role           String   @default("senior") // senior, caregiver, doctor, nurse, admin, super_admin
+  organizationId String?
+  departmentId   String?
+  employeeId     String?  // رقم الموظف
+  specialization String?  // التخصص للطبيب
+  licenseNumber  String?  // رقم الترخيص
+  dateOfBirth    DateTime?
+  gender         String?
+  profileImage   String?
+  language       String   @default("ar")
+  voiceEnabled   Boolean  @default(true)
+  seniorMode     Boolean  @default(true)
+  isActive       Boolean  @default(true)
+  lastActive     DateTime @default(now())
+  emailVerified  Boolean  @default(false)
+  phoneVerified  Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization?  @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  department     Department?    @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  caregiverRelations CaregiverRelation[]  @relation("CaregiverToSenior")
+  seniorRelations    CaregiverRelation[]   @relation("SeniorToCaregiver")
+  primaryPatients    Patient[]      @relation("PrimaryUserPatients")
+  voiceCommands  VoiceCommand[]
+  otpCodes       OTPCode[]
+  alerts         Alert[]
+  auditLogs      AuditLog[]
+  appointments   Appointment[]  @relation("DoctorAppointments")
+
+  @@index([email])
+  @@index([organizationId])
+}
+
+// المرضى (كبار السن)
+model Patient {
+  id               String   @id @default(cuid())
+  organizationId   String?
+  departmentId     String?
+  primaryUserId    String?
+  medicalRecordNumber String? @unique
+  nationalId       String?
+  name             String
+  dateOfBirth      DateTime?
+  gender           String?
+  bloodType        String?
+  profileImage     String?
+  address          String?
+  phone            String?
+  emergencyContact String?
+  emergencyPhone   String?
+  medicalConditions String?
+  allergies        String?
+  medications      String?
+  notes            String?
+  status           String   @default("active") // active, critical, discharged, outpatient
+  patientType      String   @default("inpatient") // inpatient, outpatient, home_care
+  admissionDate    DateTime?
+  dischargeDate    DateTime?
+  roomNumber       String?
+  bedNumber        String?
+  floor            String?
+  primaryDoctor    String?
+  insuranceNumber  String?
+  insuranceProvider String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization     Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  department       Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  primaryUser      User?         @relation("PrimaryUserPatients", fields: [primaryUserId], references: [id], onDelete: SetNull)
+  healthReadings   HealthReading[]
+  activityLogs     ActivityLog[]
+  medicationReminders MedicationReminderEntry[]
+  reminders        Reminder[]
+  emergencyContacts EmergencyContact[]
+  caregiverAssignments CaregiverAssignment[]
+  appointments     Appointment[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([patientType])
+}
+
+// علاقة مقدم الرعاية بالمسن
+model CaregiverRelation {
+  id         String   @id @default(cuid())
+  caregiverId String
+  seniorId   String
+  relation   String?
+  permissions String?
+  isApproved Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  caregiver User @relation("CaregiverToSenior", fields: [caregiverId], references: [id], onDelete: Cascade)
+  senior    User @relation("SeniorToCaregiver", fields: [seniorId], references: [id], onDelete: Cascade)
+
+  @@unique([caregiverId, seniorId])
+}
+
+// تعيين مقدمي الرعاية للمرضى
+model CaregiverAssignment {
+  id           String   @id @default(cuid())
+  patientId    String
+  caregiverId  String
+  role         String
+  assignedBy   String?
+  startDate    DateTime @default(now())
+  endDate      DateTime?
+  isActive     Boolean  @default(true)
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+}
+
+// رموز التحقق OTP
+model OTPCode {
+  id        String   @id @default(cuid())
+  userId    String?
+  email     String?
+  phone     String?
+  code      String
+  type      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, type])
+  @@index([phone, type])
+}
+
+// الأدوية
+model Medication {
+  id           String   @id @default(cuid())
+  name         String
+  genericName  String?
+  category     String?
+  dosage       String
+  frequency    String
+  times        String
+  instructions String?
+  sideEffects  String?
+  color        String?
+  image        String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  reminders    MedicationReminderEntry[]
+}
+
+// سجل تناول الدواء للمرضى
+model MedicationReminderEntry {
+  id           String   @id @default(cuid())
+  patientId    String
+  medicationId String
+  scheduledAt  DateTime
+  takenAt      DateTime?
+  status       String   @default("pending") // pending, taken, missed, skipped
+  notified     Boolean  @default(false)
+  caregiverNotified Boolean @default(false)
+  notes        String?
+  administeredBy String?
+  createdAt    DateTime @default(now())
+
+  patient      Patient    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  medication   Medication @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, scheduledAt])
+}
+
+// سجل النشاط
+model ActivityLog {
+  id           String   @id @default(cuid())
+  patientId    String
+  type         String
+  value        Float?
+  unit         String?
+  latitude     Float?
+  longitude    Float?
+  metadata     String?
+  timestamp    DateTime @default(now())
+
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, timestamp])
+}
+
+// قراءات الصحية
+model HealthReading {
+  id           String   @id @default(cuid())
+  patientId    String
+  type         String
+  value        String
+  value2       String?
+  unit         String?
+  deviceId     String?
+  deviceType   String?
+  notes        String?
+  isAbnormal   Boolean  @default(false)
+  recordedBy   String?
+  timestamp    DateTime @default(now())
+
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, type, timestamp])
+}
+
+// التنبيهات
+model Alert {
+  id           String   @id @default(cuid())
+  userId       String?
+  patientId    String?
+  organizationId String?
+  type         String
+  severity     String   @default("medium")
+  title        String
+  message      String
+  data         String?
+  isRead       Boolean  @default(false)
+  isResolved   Boolean  @default(false)
+  resolvedAt   DateTime?
+  resolvedBy   String?
+  createdAt    DateTime @default(now())
+
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([type, severity])
+}
+
+// التذكيرات العامة
+model Reminder {
+  id           String   @id @default(cuid())
+  patientId    String
+  title        String
+  description  String?
+  type         String
+  scheduledAt  DateTime
+  isRecurring  Boolean  @default(false)
+  recurrencePattern String?
+  voiceMessage String?
+  isCompleted  Boolean  @default(false)
+  completedAt  DateTime?
+  createdAt    DateTime @default(now())
+
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, scheduledAt])
+}
+
+// جهات اتصال الطوارئ
+model EmergencyContact {
+  id           String   @id @default(cuid())
+  patientId    String
+  name         String
+  phone        String
+  relation     String?
+  priority     Int      @default(1)
+  isPrimary    Boolean  @default(false)
+  notifyOnEmergency Boolean @default(true)
+  notifyOnMissedMedication Boolean @default(false)
+  notifyOnInactivity Boolean @default(true)
+  createdAt    DateTime @default(now())
+
+  patient      Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+}
+
+// الأوامر الصوتية
+model VoiceCommand {
+  id           String   @id @default(cuid())
+  userId       String?
+  command      String
+  intent       String?
+  response     String?
+  executed     Boolean  @default(false)
+  timestamp    DateTime @default(now())
+
+  user         User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([timestamp])
+}
+
+// جلسات المكالمات
+model CallSession {
+  id           String   @id @default(cuid())
+  patientId    String?
+  contactId    String?
+  type         String
+  status       String
+  duration     Int?
+  isEmergency  Boolean  @default(false)
+  startedAt    DateTime @default(now())
+  endedAt      DateTime?
+
+  @@index([startedAt])
+}
+
+// المواعيد
+model Appointment {
+  id             String   @id @default(cuid())
+  organizationId String?
+  patientId      String
+  doctorId       String?
+  departmentId   String?
+  type           String   // consultation, followup, checkup, emergency
+  title          String
+  description    String?
+  scheduledAt    DateTime
+  duration       Int      @default(30) // minutes
+  status         String   @default("scheduled") // scheduled, confirmed, in_progress, completed, cancelled, no_show
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  patient        Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor         User?    @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: SetNull)
+
+  @@index([patientId, scheduledAt])
+  @@index([doctorId, scheduledAt])
+  @@index([status])
+}
+
+// سجل التدقيق
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String?
+  userId         String?
+  action         String
+  entityType     String
+  entityId       String?
+  oldValue       String?
+  newValue       String?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([entityType, entityId])
+}
+
+// إعدادات المؤسسة
+model OrganizationSetting {
+  id             String   @id @default(cuid())
+  organizationId String
+  key            String
+  value          String
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+}
+
+// الإعدادات العامة
+model Setting {
+  id           String   @id @default(cuid())
+  organizationId String?
+  key          String
+  value        String
+  description  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([organizationId, key])
+}
