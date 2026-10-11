@@ -49,3 +49,9 @@ prompt
 server.log
 # Skills directory
 /skills/
+# database files
+db/*.db
+db/*.db-journal
+
+# runtime files
+.zscripts
