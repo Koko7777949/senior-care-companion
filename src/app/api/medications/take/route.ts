@@ -1,37 +1,74 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getDefaultPatientId } from '@/lib/patient';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { medicationId, userId, notes } = body;
+    const { medicationId, patientId: explicitPatientId, notes } = body;
 
     if (!medicationId) {
       return NextResponse.json(
-        { error: 'معرف الدواء مطلوب' },
+        { success: false, error: 'معرف الدواء مطلوب' },
         { status: 400 }
       );
     }
 
-    // إنشاء سجل تناول الدواء
-    const reminder = await db.medicationReminder.create({
-      data: {
-        medicationId: medicationId,
-        scheduledAt: new Date(),
-        takenAt: new Date(),
-        status: 'taken',
-        notes: notes || null,
+    const patientId = await getDefaultPatientId(explicitPatientId);
+
+    if (!patientId) {
+      return NextResponse.json(
+        { success: false, error: 'لا يوجد مريض مسجل' },
+        { status: 400 }
+      );
+    }
+
+    // Find today's pending reminder entry for this medication and patient
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    let reminder = await db.medicationReminderEntry.findFirst({
+      where: {
+        medicationId,
+        patientId,
+        scheduledAt: { gte: today, lte: endOfToday },
       },
     });
+
+    if (reminder) {
+      // Update existing reminder
+      reminder = await db.medicationReminderEntry.update({
+        where: { id: reminder.id },
+        data: {
+          takenAt: new Date(),
+          status: 'taken',
+          notes: notes || reminder.notes,
+        },
+      });
+    } else {
+      // Create a new taken entry
+      reminder = await db.medicationReminderEntry.create({
+        data: {
+          medicationId,
+          patientId,
+          scheduledAt: new Date(),
+          takenAt: new Date(),
+          status: 'taken',
+          notes: notes || null,
+        },
+      });
+    }
 
     // إنشاء تنبيه للتأكيد
     await db.alert.create({
       data: {
-        userId: userId || 'senior-1',
+        patientId,
         type: 'medication',
         severity: 'low',
         title: 'تم تناول الدواء',
-        message: `تم تسجيل تناول الدواء بنجاح`,
+        message: 'تم تسجيل تناول الدواء بنجاح',
         isRead: true,
       },
     });
@@ -39,12 +76,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: 'تم تسجيل تناول الدواء بنجاح',
-      reminder: reminder,
+      reminder,
     });
   } catch (error) {
     console.error('Error recording medication:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في تسجيل تناول الدواء' },
+      { success: false, error: 'حدث خطأ في تسجيل تناول الدواء' },
       { status: 500 }
     );
   }
@@ -53,24 +90,25 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId') || 'senior-1';
+    const explicitPatientId = searchParams.get('patientId');
+    const patientId = await getDefaultPatientId(explicitPatientId);
+
+    if (!patientId) {
+      return NextResponse.json({ success: true, medications: [] });
+    }
 
     // جلب الأدوية مع سجلات التناول
     const medications = await db.medication.findMany({
-      where: {
-        userId: userId,
-        isActive: true,
-      },
+      where: { isActive: true },
       include: {
         reminders: {
           where: {
+            patientId,
             scheduledAt: {
               gte: new Date(new Date().setHours(0, 0, 0, 0)),
             },
           },
-          orderBy: {
-            scheduledAt: 'desc',
-          },
+          orderBy: { scheduledAt: 'desc' },
           take: 5,
         },
       },
@@ -78,12 +116,12 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      medications: medications,
+      medications,
     });
   } catch (error) {
     console.error('Error fetching medications:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في جلب الأدوية' },
+      { success: false, error: 'حدث خطأ في جلب الأدوية' },
       { status: 500 }
     );
   }

@@ -1,14 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getDefaultPatientId } from '@/lib/patient';
 
 // GET - جلب جميع جهات الاتصال
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId') || 'senior-1';
+    const explicitPatientId = searchParams.get('patientId');
+    const patientId = await getDefaultPatientId(explicitPatientId);
+
+    if (!patientId) {
+      return NextResponse.json({
+        success: true,
+        contacts: [],
+      });
+    }
 
     const contacts = await db.emergencyContact.findMany({
-      where: { userId: userId },
+      where: { patientId },
       orderBy: { priority: 'asc' },
     });
 
@@ -19,7 +28,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching contacts:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في جلب جهات الاتصال' },
+      { success: false, error: 'حدث خطأ في جلب جهات الاتصال' },
       { status: 500 }
     );
   }
@@ -29,11 +38,20 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { userId, name, phone, relation, priority, isPrimary, notifyOnEmergency, notifyOnMissedMedication, notifyOnInactivity } = body;
+    const { patientId: explicitPatientId, name, phone, relation, priority, isPrimary, notifyOnEmergency, notifyOnMissedMedication, notifyOnInactivity } = body;
 
     if (!name || !phone) {
       return NextResponse.json(
-        { error: 'الاسم ورقم الهاتف مطلوبان' },
+        { success: false, error: 'الاسم ورقم الهاتف مطلوبان' },
+        { status: 400 }
+      );
+    }
+
+    const patientId = await getDefaultPatientId(explicitPatientId);
+
+    if (!patientId) {
+      return NextResponse.json(
+        { success: false, error: 'لا يوجد مريض مسجل' },
         { status: 400 }
       );
     }
@@ -41,16 +59,16 @@ export async function POST(request: NextRequest) {
     // إذا كانت جهة الاتصال رئيسية، أزل الرئيسية من الجهات الأخرى
     if (isPrimary) {
       await db.emergencyContact.updateMany({
-        where: { userId: userId || 'senior-1', isPrimary: true },
+        where: { patientId, isPrimary: true },
         data: { isPrimary: false },
       });
     }
 
     const contact = await db.emergencyContact.create({
       data: {
-        userId: userId || 'senior-1',
-        name: name,
-        phone: phone,
+        patientId,
+        name,
+        phone,
         relation: relation || 'other',
         priority: priority || 1,
         isPrimary: isPrimary || false,
@@ -68,7 +86,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error creating contact:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في إضافة جهة الاتصال' },
+      { success: false, error: 'حدث خطأ في إضافة جهة الاتصال' },
       { status: 500 }
     );
   }
@@ -82,33 +100,33 @@ export async function PUT(request: NextRequest) {
 
     if (!id) {
       return NextResponse.json(
-        { error: 'معرف جهة الاتصال مطلوب' },
+        { success: false, error: 'معرف جهة الاتصال مطلوب' },
         { status: 400 }
       );
     }
 
     // إذا كانت جهة الاتصال رئيسية، أزل الرئيسية من الجهات الأخرى
     if (isPrimary) {
-      const currentContact = await db.emergencyContact.findUnique({ where: { id: id } });
+      const currentContact = await db.emergencyContact.findUnique({ where: { id } });
       if (currentContact) {
         await db.emergencyContact.updateMany({
-          where: { userId: currentContact.userId, isPrimary: true },
+          where: { patientId: currentContact.patientId, isPrimary: true },
           data: { isPrimary: false },
         });
       }
     }
 
     const contact = await db.emergencyContact.update({
-      where: { id: id },
+      where: { id },
       data: {
-        name: name,
-        phone: phone,
-        relation: relation,
-        priority: priority,
-        isPrimary: isPrimary,
-        notifyOnEmergency: notifyOnEmergency,
-        notifyOnMissedMedication: notifyOnMissedMedication,
-        notifyOnInactivity: notifyOnInactivity,
+        name,
+        phone,
+        relation,
+        priority,
+        isPrimary,
+        notifyOnEmergency,
+        notifyOnMissedMedication,
+        notifyOnInactivity,
       },
     });
 
@@ -120,7 +138,7 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     console.error('Error updating contact:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في تحديث جهة الاتصال' },
+      { success: false, error: 'حدث خطأ في تحديث جهة الاتصال' },
       { status: 500 }
     );
   }
@@ -134,13 +152,13 @@ export async function DELETE(request: NextRequest) {
 
     if (!id) {
       return NextResponse.json(
-        { error: 'معرف جهة الاتصال مطلوب' },
+        { success: false, error: 'معرف جهة الاتصال مطلوب' },
         { status: 400 }
       );
     }
 
     await db.emergencyContact.delete({
-      where: { id: id },
+      where: { id },
     });
 
     return NextResponse.json({
@@ -150,7 +168,7 @@ export async function DELETE(request: NextRequest) {
   } catch (error) {
     console.error('Error deleting contact:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في حذف جهة الاتصال' },
+      { success: false, error: 'حدث خطأ في حذف جهة الاتصال' },
       { status: 500 }
     );
   }

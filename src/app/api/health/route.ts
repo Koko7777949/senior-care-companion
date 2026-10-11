@@ -1,14 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getDefaultPatientId } from '@/lib/patient';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { userId, type, value, value2, unit, deviceId, deviceType, notes } = body;
+    const { patientId: explicitPatientId, type, value, value2, unit, deviceId, deviceType, notes } = body;
 
     if (!type || !value) {
       return NextResponse.json(
-        { error: 'نوع القراءة والقيمة مطلوبان' },
+        { success: false, error: 'نوع القراءة والقيمة مطلوبان' },
+        { status: 400 }
+      );
+    }
+
+    const patientId = await getDefaultPatientId(explicitPatientId);
+
+    if (!patientId) {
+      return NextResponse.json(
+        { success: false, error: 'لا يوجد مريض مسجل' },
         { status: 400 }
       );
     }
@@ -28,7 +38,6 @@ export async function POST(request: NextRequest) {
         isAbnormal = numericValue < 95;
         break;
       case 'blood_pressure':
-        // للضغط، نحتاج للقيمتين
         if (value2) {
           const systolic = numericValue;
           const diastolic = parseFloat(value2);
@@ -40,15 +49,15 @@ export async function POST(request: NextRequest) {
     // إنشاء سجل القراءة الصحية
     const reading = await db.healthReading.create({
       data: {
-        userId: userId || 'senior-1',
-        type: type,
-        value: value,
+        patientId,
+        type,
+        value,
         value2: value2 || null,
         unit: unit || null,
         deviceId: deviceId || null,
         deviceType: deviceType || null,
         notes: notes || null,
-        isAbnormal: isAbnormal,
+        isAbnormal,
       },
     });
 
@@ -56,7 +65,7 @@ export async function POST(request: NextRequest) {
     if (isAbnormal) {
       await db.alert.create({
         data: {
-          userId: userId || 'senior-1',
+          patientId,
           type: 'health_abnormal',
           severity: 'high',
           title: 'قراءة صحية غير طبيعية',
@@ -70,14 +79,14 @@ export async function POST(request: NextRequest) {
       success: true,
       reading: reading,
       isAbnormal: isAbnormal,
-      message: isAbnormal 
+      message: isAbnormal
         ? 'تم تسجيل القراءة وهي غير طبيعية. تم إرسال تنبيه.'
         : 'تم تسجيل القراءة بنجاح',
     });
   } catch (error) {
     console.error('Error recording health reading:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في تسجيل القراءة الصحية' },
+      { success: false, error: 'حدث خطأ في تسجيل القراءة الصحية' },
       { status: 500 }
     );
   }
@@ -86,17 +95,27 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId') || 'senior-1';
+    const explicitPatientId = searchParams.get('patientId');
     const type = searchParams.get('type');
     const limit = parseInt(searchParams.get('limit') || '50');
 
-    const where: { userId: string; type?: string } = { userId };
+    const patientId = await getDefaultPatientId(explicitPatientId);
+
+    if (!patientId) {
+      return NextResponse.json({
+        success: true,
+        readings: [],
+        stats: {},
+      });
+    }
+
+    const where: { patientId: string; type?: string } = { patientId };
     if (type) {
       where.type = type;
     }
 
     const readings = await db.healthReading.findMany({
-      where: where,
+      where,
       orderBy: {
         timestamp: 'desc',
       },
@@ -105,7 +124,7 @@ export async function GET(request: NextRequest) {
 
     // حساب الإحصائيات
     const stats: Record<string, { avg: number; min: number; max: number; count: number }> = {};
-    
+
     readings.forEach((reading) => {
       if (!stats[reading.type]) {
         stats[reading.type] = { avg: 0, min: Infinity, max: -Infinity, count: 0 };
@@ -129,7 +148,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('Error fetching health readings:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في جلب القراءات الصحية' },
+      { success: false, error: 'حدث خطأ في جلب القراءات الصحية' },
       { status: 500 }
     );
   }

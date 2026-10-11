@@ -1,23 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { getDefaultPatientId } from '@/lib/patient';
 
 // GET - جلب سجلات النشاط
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId') || 'senior-1';
+    const explicitPatientId = searchParams.get('patientId');
     const type = searchParams.get('type');
     const days = parseInt(searchParams.get('days') || '7');
+
+    const patientId = await getDefaultPatientId(explicitPatientId);
+
+    if (!patientId) {
+      return NextResponse.json({
+        success: true,
+        activities: [],
+        stats: { totalSteps: 0, totalActiveMinutes: 0, lastActivity: null },
+      });
+    }
 
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    const where: { userId: string; type?: string; timestamp?: { gte: Date } } = { userId };
+    const where: { patientId: string; type?: string; timestamp?: { gte: Date } } = { patientId };
     if (type) where.type = type;
     where.timestamp = { gte: startDate };
 
     const activities = await db.activityLog.findMany({
-      where: where,
+      where,
       orderBy: { timestamp: 'desc' },
       take: 100,
     });
@@ -31,13 +42,13 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      activities: activities,
-      stats: stats,
+      activities,
+      stats,
     });
   } catch (error) {
     console.error('Error fetching activities:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في جلب سجلات النشاط' },
+      { success: false, error: 'حدث خطأ في جلب سجلات النشاط' },
       { status: 500 }
     );
   }
@@ -47,19 +58,28 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { userId, type, value, unit, latitude, longitude, metadata } = body;
+    const { patientId: explicitPatientId, type, value, unit, latitude, longitude, metadata } = body;
 
     if (!type) {
       return NextResponse.json(
-        { error: 'نوع النشاط مطلوب' },
+        { success: false, error: 'نوع النشاط مطلوب' },
+        { status: 400 }
+      );
+    }
+
+    const patientId = await getDefaultPatientId(explicitPatientId);
+
+    if (!patientId) {
+      return NextResponse.json(
+        { success: false, error: 'لا يوجد مريض مسجل' },
         { status: 400 }
       );
     }
 
     const activity = await db.activityLog.create({
       data: {
-        userId: userId || 'senior-1',
-        type: type,
+        patientId,
+        type,
         value: value || null,
         unit: unit || null,
         latitude: latitude || null,
@@ -68,21 +88,15 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // تحديث آخر نشاط للمستخدم
-    await db.user.update({
-      where: { id: userId || 'senior-1' },
-      data: { lastActive: new Date() },
-    });
-
     return NextResponse.json({
       success: true,
-      activity: activity,
+      activity,
       message: 'تم تسجيل النشاط بنجاح',
     });
   } catch (error) {
     console.error('Error creating activity:', error);
     return NextResponse.json(
-      { error: 'حدث خطأ في تسجيل النشاط' },
+      { success: false, error: 'حدث خطأ في تسجيل النشاط' },
       { status: 500 }
     );
   }
